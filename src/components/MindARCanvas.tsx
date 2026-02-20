@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import type { CSSProperties } from 'react'
 import * as THREE from 'three'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MindARThree } from 'mind-ar/dist/mindar-image-three.prod.js'
 import { TargetGuide } from './TargetGuide'
 
@@ -32,6 +33,26 @@ const COHESION_WEIGHT = 0.01
 const BOUNDARY_WEIGHT = 0.1
 const BOUNDARY_MARGIN = 0.1
 
+// 海藻
+const SEAWEED_COUNT = 6
+const SEAWEED_COLORS = ['#2d8a4e', '#3cb371', '#228b22', '#1a6b3c']
+const SEAWEED_HEIGHT_MIN = 0.15
+const SEAWEED_HEIGHT_MAX = 0.35
+const SEAWEED_RADIUS = 0.005
+const SEAWEED_SWAY_SPEED = 2.0
+const SEAWEED_SWAY_AMOUNT = 0.03
+
+// 泡パーティクル
+const BUBBLE_COUNT = 200
+const BUBBLE_AREA = { x: [-0.5, 0.5], z: [-0.3, 0.1] }
+const BUBBLE_Y_MIN = 0.0
+const BUBBLE_Y_MAX = 0.6
+const BUBBLE_RISE_SPEED = 0.03
+const BUBBLE_SIZE = 0.008
+
+// 出現アニメーション
+const APPEAR_DURATION = 0.8
+
 // ============================================================
 // 型
 // ============================================================
@@ -41,8 +62,42 @@ interface FishState {
   velocity: [number, number, number]
 }
 
+interface SeaweedState {
+  mesh: THREE.Mesh
+  basePositions: Float32Array
+  height: number
+  phaseOffset: number
+}
+
+interface BubbleSystem {
+  points: THREE.Points
+  velocities: Float32Array
+}
+
+interface AppearAnimation {
+  active: boolean
+  startTime: number
+}
+
 // ============================================================
-// 魚メッシュ生成
+// GLTF 魚モデルロード
+// ============================================================
+
+const gltfLoader = new GLTFLoader()
+
+function normalizeModel(model: THREE.Group): void {
+  const box = new THREE.Box3().setFromObject(model)
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z)
+  if (maxDim > 0) {
+    model.scale.multiplyScalar(1 / maxDim)
+  }
+  const center = box.getCenter(new THREE.Vector3())
+  model.position.sub(center.multiplyScalar(1 / maxDim))
+}
+
+// ============================================================
+// 魚メッシュ生成（GLTF フォールバック用）
 // ============================================================
 
 function createFishMesh(color: string, scale: number): THREE.Group {
@@ -55,36 +110,171 @@ function createFishMesh(color: string, scale: number): THREE.Group {
     roughness: 0.4,
   })
 
-  // 胴体
   const body = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat)
   body.scale.set(1.6, 0.6, 0.5)
   group.add(body)
 
-  // 尾びれ
   const tail = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.8, 4), mat)
   tail.position.set(-1.2, 0, 0)
   tail.rotation.set(0, 0, Math.PI / 2)
   tail.name = 'tail'
   group.add(tail)
 
-  // 背びれ
   const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.4, 4), mat)
   dorsal.position.set(0.2, 0.45, 0)
   group.add(dorsal)
 
-  // 胸びれ（左）
   const leftFin = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 4), mat)
   leftFin.position.set(0.3, -0.1, 0.35)
   leftFin.rotation.set(0.3, 0, 0.5)
   group.add(leftFin)
 
-  // 胸びれ（右）
   const rightFin = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 4), mat)
   rightFin.position.set(0.3, -0.1, -0.35)
   rightFin.rotation.set(-0.3, 0, 0.5)
   group.add(rightFin)
 
   return group
+}
+
+// ============================================================
+// 海藻
+// ============================================================
+
+function createSeaweed(
+  x: number,
+  z: number,
+  height: number,
+  color: string,
+): SeaweedState {
+  const points = [
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0.01, height * 0.33, 0),
+    new THREE.Vector3(-0.01, height * 0.66, 0),
+    new THREE.Vector3(0.005, height, 0),
+  ]
+  const curve = new THREE.CatmullRomCurve3(points)
+  const geometry = new THREE.TubeGeometry(curve, 12, SEAWEED_RADIUS, 5, false)
+
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.8,
+    metalness: 0.0,
+    side: THREE.DoubleSide,
+  })
+
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.position.set(x, 0, z)
+
+  const basePositions = new Float32Array(geometry.attributes.position.array)
+
+  return { mesh, basePositions, height, phaseOffset: Math.random() * Math.PI * 2 }
+}
+
+function createSeaweeds(): SeaweedState[] {
+  const seaweeds: SeaweedState[] = []
+  for (let i = 0; i < SEAWEED_COUNT; i++) {
+    const angle = (i / SEAWEED_COUNT) * Math.PI * 2
+    const radius = 0.35 + Math.random() * 0.15
+    const x = Math.cos(angle) * radius
+    const z = Math.sin(angle) * radius * 0.5 - 0.15
+    const height =
+      SEAWEED_HEIGHT_MIN + Math.random() * (SEAWEED_HEIGHT_MAX - SEAWEED_HEIGHT_MIN)
+    const color = SEAWEED_COLORS[i % SEAWEED_COLORS.length]
+    seaweeds.push(createSeaweed(x, z, height, color))
+  }
+  return seaweeds
+}
+
+function updateSeaweeds(seaweeds: SeaweedState[], time: number): void {
+  for (const sw of seaweeds) {
+    const positions = sw.mesh.geometry.attributes.position
+    const base = sw.basePositions
+    const maxH = sw.height
+
+    for (let i = 0; i < positions.count; i++) {
+      const baseX = base[i * 3]
+      const baseY = base[i * 3 + 1]
+      const baseZ = base[i * 3 + 2]
+
+      const heightRatio = maxH > 0 ? baseY / maxH : 0
+      const sway =
+        Math.sin(time * SEAWEED_SWAY_SPEED + sw.phaseOffset + baseY * 8) *
+        heightRatio *
+        SEAWEED_SWAY_AMOUNT
+
+      positions.setXYZ(i, baseX + sway, baseY, baseZ + sway * 0.3)
+    }
+
+    positions.needsUpdate = true
+  }
+}
+
+// ============================================================
+// 泡パーティクル
+// ============================================================
+
+function createBubbles(): BubbleSystem {
+  const positions = new Float32Array(BUBBLE_COUNT * 3)
+  const velocities = new Float32Array(BUBBLE_COUNT)
+
+  for (let i = 0; i < BUBBLE_COUNT; i++) {
+    positions[i * 3] =
+      BUBBLE_AREA.x[0] + Math.random() * (BUBBLE_AREA.x[1] - BUBBLE_AREA.x[0])
+    positions[i * 3 + 1] =
+      BUBBLE_Y_MIN + Math.random() * (BUBBLE_Y_MAX - BUBBLE_Y_MIN)
+    positions[i * 3 + 2] =
+      BUBBLE_AREA.z[0] + Math.random() * (BUBBLE_AREA.z[1] - BUBBLE_AREA.z[0])
+    velocities[i] = BUBBLE_RISE_SPEED * (0.5 + Math.random() * 0.5)
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+
+  const material = new THREE.PointsMaterial({
+    color: 0xaaddff,
+    size: BUBBLE_SIZE,
+    transparent: true,
+    opacity: 0.4,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+
+  return { points: new THREE.Points(geometry, material), velocities }
+}
+
+function updateBubbles(bubbles: BubbleSystem, delta: number): void {
+  const positions = bubbles.points.geometry.attributes.position
+  const arr = positions.array as Float32Array
+
+  for (let i = 0; i < BUBBLE_COUNT; i++) {
+    const xi = i * 3
+    const yi = i * 3 + 1
+    const zi = i * 3 + 2
+
+    arr[yi] += bubbles.velocities[i] * delta
+    arr[xi] += Math.sin(arr[yi] * 20 + i) * 0.0002
+
+    if (arr[yi] > BUBBLE_Y_MAX) {
+      arr[yi] = BUBBLE_Y_MIN
+      arr[xi] =
+        BUBBLE_AREA.x[0] + Math.random() * (BUBBLE_AREA.x[1] - BUBBLE_AREA.x[0])
+      arr[zi] =
+        BUBBLE_AREA.z[0] + Math.random() * (BUBBLE_AREA.z[1] - BUBBLE_AREA.z[0])
+    }
+  }
+
+  positions.needsUpdate = true
+}
+
+// ============================================================
+// 出現アニメーション
+// ============================================================
+
+function easeOutBack(t: number): number {
+  const c1 = 1.70158
+  const c3 = c1 + 1
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
 }
 
 // ============================================================
@@ -215,7 +405,7 @@ function updateBoids(fish: FishState[], delta: number): void {
 }
 
 // ============================================================
-// 魚メッシュの更新（位置・回転・尾びれアニメーション）
+// 魚メッシュの更新（位置・回転）
 // ============================================================
 
 function updateFishMeshes(
@@ -237,7 +427,7 @@ function updateFishMeshes(
     const pitch = Math.atan2(vy, hSpeed)
     mesh.rotation.z = -pitch * 0.3 + Math.sin(elapsedTime * 4) * 0.05
 
-    // 尾びれアニメーション
+    // フォールバック魚の尾びれアニメーション
     const tail = mesh.getObjectByName('tail') as THREE.Mesh | undefined
     if (tail) {
       tail.rotation.y = Math.sin(elapsedTime * 6 + i) * 0.4
@@ -318,20 +508,90 @@ export function MindARCanvas({ onBack }: MindARCanvasProps) {
       // ---- アンカー ----
       const anchor = mindarThree.addAnchor(0)
 
-      // ---- 魚の生成 ----
+      // ---- 魚の生成（GLTF 優先、フォールバックあり） ----
       const fishStates = initializeFish(FISH_COUNT)
-      const fishMeshes = fishStates.map((_, i) => {
-        const color = FISH_COLORS[i % FISH_COLORS.length]
-        const scale = 0.05 + Math.random() * 0.03
-        return createFishMesh(color, scale)
-      })
+      let fishMeshes: THREE.Group[]
+      const mixers: THREE.AnimationMixer[] = []
+
+      try {
+        const gltf = await new Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>(
+          (resolve, reject) => {
+            gltfLoader.load(
+              `${import.meta.env.BASE_URL}models/fish.glb`,
+              (result) => resolve(result),
+              undefined,
+              reject,
+            )
+          },
+        )
+
+        const template = gltf.scene
+        normalizeModel(template)
+
+        fishMeshes = fishStates.map((_, i) => {
+          const scale = 0.05 + Math.random() * 0.03
+          const wrapper = new THREE.Group()
+          const clone = template.clone()
+          clone.scale.multiplyScalar(scale)
+
+          // カラーバリエーション
+          const color = new THREE.Color(FISH_COLORS[i % FISH_COLORS.length])
+          clone.traverse((child) => {
+            if (child instanceof THREE.Mesh && child.material) {
+              child.material = (child.material as THREE.MeshStandardMaterial).clone()
+              ;(child.material as THREE.MeshStandardMaterial).color = color
+            }
+          })
+
+          wrapper.add(clone)
+
+          // GLTF アニメーション（泳ぎ等）があれば再生
+          if (gltf.animations.length > 0) {
+            const mixer = new THREE.AnimationMixer(clone)
+            for (const clip of gltf.animations) {
+              const action = mixer.clipAction(clip)
+              action.play()
+            }
+            // 各魚のアニメーション位相をずらす
+            mixer.setTime(Math.random() * 2)
+            mixers.push(mixer)
+          }
+
+          return wrapper
+        })
+      } catch {
+        // GLTF ロード失敗 → フォールバック
+        console.warn('GLTF fish model failed to load, using fallback primitives')
+        fishMeshes = fishStates.map((_, i) => {
+          const color = FISH_COLORS[i % FISH_COLORS.length]
+          const scale = 0.05 + Math.random() * 0.03
+          return createFishMesh(color, scale)
+        })
+      }
+
       fishMeshes.forEach((m) => anchor.group.add(m))
+
+      // ---- 海藻の生成 ----
+      const seaweeds = createSeaweeds()
+      seaweeds.forEach((sw) => anchor.group.add(sw.mesh))
+
+      // ---- 泡パーティクルの生成 ----
+      const bubbles = createBubbles()
+      anchor.group.add(bubbles.points)
+
+      // ---- 出現アニメーション ----
+      anchor.group.scale.setScalar(0)
+      const appearAnim: AppearAnimation = { active: false, startTime: 0 }
 
       // ---- アンカーイベント ----
       anchor.onTargetFound = () => {
+        appearAnim.active = true
+        appearAnim.startTime = performance.now() / 1000
         if (!cancelled) setTargetFoundRef.current(true)
       }
       anchor.onTargetLost = () => {
+        anchor.group.scale.setScalar(0)
+        appearAnim.active = false
         if (!cancelled) setTargetFoundRef.current(false)
       }
 
@@ -350,11 +610,36 @@ export function MindARCanvas({ onBack }: MindARCanvasProps) {
         const now = performance.now()
         const delta = (now - lastTime) / 1000
         lastTime = now
+        const elapsed = now / 1000
 
         // 大きな delta をスキップ（タブ非アクティブ復帰時）
         if (delta < 0.1) {
+          // 出現アニメーション
+          if (appearAnim.active) {
+            const progress = Math.min(
+              (elapsed - appearAnim.startTime) / APPEAR_DURATION,
+              1,
+            )
+            anchor.group.scale.setScalar(easeOutBack(progress))
+            if (progress >= 1) {
+              appearAnim.active = false
+            }
+          }
+
+          // Boid シミュレーション + 魚メッシュ更新
           updateBoids(fishStates, delta)
-          updateFishMeshes(fishMeshes, fishStates, now / 1000)
+          updateFishMeshes(fishMeshes, fishStates, elapsed)
+
+          // GLTF アニメーション更新
+          for (const mixer of mixers) {
+            mixer.update(delta)
+          }
+
+          // 海藻の揺れ更新
+          updateSeaweeds(seaweeds, elapsed)
+
+          // 泡パーティクル更新
+          updateBubbles(bubbles, delta)
         }
 
         renderer.render(scene, camera)

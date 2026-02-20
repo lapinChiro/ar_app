@@ -28,4 +28,7 @@ function mindARThreeCompat(): Plugin {
 export default defineConfig({
   plugins: [react(), mindARThreeCompat()],
   base: '/ar_app/',
+  optimizeDeps: {
+    exclude: ['mind-ar'],
+  },
 })
