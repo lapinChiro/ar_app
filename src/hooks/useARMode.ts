@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { recenterOrientation } from './useDeviceOrientation'
 
-export type ARMode = 'webxr' | 'orientation' | 'overlay'
+export type ARMode = 'webxr' | 'orientation' | 'overlay' | 'mindar'
 
 export type ARState =
   | { status: 'idle' }
@@ -11,7 +11,8 @@ export type ARState =
 
 export interface UseARModeReturn {
   state: ARState
-  start: () => Promise<void>
+  start: (preferredMode?: 'mindar' | 'standard') => Promise<void>
+  reset: () => void
   recenter: () => void
   handleXRSessionEnd: () => void
   handleFallbackToOverlay: () => void
@@ -77,7 +78,18 @@ export function useARMode(): UseARModeReturn {
     return stream
   }, [stopStream])
 
-  const start = useCallback(async () => {
+  const reset = useCallback(() => {
+    stopStream()
+    setState({ status: 'idle' })
+  }, [stopStream])
+
+  const start = useCallback(async (preferredMode?: 'mindar' | 'standard') => {
+    // MindAR モード: カメラは MindARThree が管理するため直接 active に遷移
+    if (preferredMode === 'mindar') {
+      setState({ status: 'active', mode: 'mindar', stream: null })
+      return
+    }
+
     setState({ status: 'requesting' })
 
     try {
@@ -174,6 +186,7 @@ export function useARMode(): UseARModeReturn {
   return {
     state,
     start,
+    reset,
     recenter,
     handleXRSessionEnd,
     handleFallbackToOverlay,
