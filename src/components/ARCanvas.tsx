@@ -1,10 +1,16 @@
 import { Canvas } from '@react-three/fiber'
 import { Lighting } from './Lighting'
 import { FishSchool } from './FishSchool'
+import { WorldLockedCamera } from './WorldLockedCamera'
 
 const FISH_COUNT = 8
 
-export function ARCanvas() {
+interface ARCanvasProps {
+  worldLocked: boolean
+  onFallbackToOverlay: () => void
+}
+
+export function ARCanvas({ worldLocked, onFallbackToOverlay }: ARCanvasProps) {
   return (
     <Canvas
       gl={{
@@ -19,7 +25,7 @@ export function ARCanvas() {
         fov: 60,
         near: 0.1,
         far: 100,
-        position: [0, 0, 5],
+        position: worldLocked ? [0, 0, 0] : [0, 0, 5],
       }}
       style={{
         position: 'fixed',
@@ -29,8 +35,11 @@ export function ARCanvas() {
         touchAction: 'none',
       }}
     >
+      {worldLocked && (
+        <WorldLockedCamera onFallbackToOverlay={onFallbackToOverlay} />
+      )}
       <Lighting />
-      <FishSchool count={FISH_COUNT} />
+      <FishSchool count={FISH_COUNT} worldLocked={worldLocked} />
     </Canvas>
   )
 }

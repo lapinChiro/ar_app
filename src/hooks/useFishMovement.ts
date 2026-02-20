@@ -6,10 +6,22 @@ export interface FishState {
   velocity: [number, number, number]
 }
 
-const BOUNDS = {
-  x: [-3, 3] as const,
-  y: [-2, 2] as const,
-  z: [-2, 2] as const,
+interface Bounds {
+  x: readonly [number, number]
+  y: readonly [number, number]
+  z: readonly [number, number]
+}
+
+const OVERLAY_BOUNDS: Bounds = {
+  x: [-3, 3],
+  y: [-2, 2],
+  z: [-2, 2],
+}
+
+const WORLD_LOCKED_BOUNDS: Bounds = {
+  x: [-4, 4],
+  y: [-3, 3],
+  z: [-4, 4],
 }
 
 const MIN_SPEED = 0.3
@@ -26,7 +38,23 @@ const COHESION_WEIGHT = 0.01
 const BOUNDARY_WEIGHT = 0.1
 const BOUNDARY_MARGIN = 0.5
 
-function initializeFish(count: number): FishState[] {
+function initializeFish(count: number, worldLocked: boolean): FishState[] {
+  if (worldLocked) {
+    // ワールドロック: カメラ正面（-Z方向）付近に集中配置
+    return Array.from({ length: count }, () => ({
+      position: [
+        (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * 3,
+        -(Math.random() * 2 + 1),
+      ] as [number, number, number],
+      velocity: [
+        (Math.random() - 0.5) * 0.6,
+        (Math.random() - 0.5) * 0.3,
+        (Math.random() - 0.5) * 0.3,
+      ] as [number, number, number],
+    }))
+  }
+
   return Array.from({ length: count }, () => ({
     position: [
       (Math.random() - 0.5) * 4,
@@ -71,8 +99,12 @@ function clampSpeed(velocity: [number, number, number]): void {
   }
 }
 
-export function useFishMovement(count: number): FishState[] {
-  const fishRef = useRef<FishState[]>(initializeFish(count))
+export function useFishMovement(
+  count: number,
+  worldLocked: boolean = false,
+): FishState[] {
+  const fishRef = useRef<FishState[]>(initializeFish(count, worldLocked))
+  const bounds: Bounds = worldLocked ? WORLD_LOCKED_BOUNDS : OVERLAY_BOUNDS
 
   useFrame((_, delta) => {
     // タブ非アクティブ復帰時の大きな delta をスキップ
@@ -141,20 +173,20 @@ export function useFishMovement(count: number): FishState[] {
 
       // 境界反発
       const pos = current.position
-      if (pos[0] > BOUNDS.x[1] - BOUNDARY_MARGIN) {
-        accX -= (pos[0] - (BOUNDS.x[1] - BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
-      } else if (pos[0] < BOUNDS.x[0] + BOUNDARY_MARGIN) {
-        accX -= (pos[0] - (BOUNDS.x[0] + BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
+      if (pos[0] > bounds.x[1] - BOUNDARY_MARGIN) {
+        accX -= (pos[0] - (bounds.x[1] - BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
+      } else if (pos[0] < bounds.x[0] + BOUNDARY_MARGIN) {
+        accX -= (pos[0] - (bounds.x[0] + BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
       }
-      if (pos[1] > BOUNDS.y[1] - BOUNDARY_MARGIN) {
-        accY -= (pos[1] - (BOUNDS.y[1] - BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
-      } else if (pos[1] < BOUNDS.y[0] + BOUNDARY_MARGIN) {
-        accY -= (pos[1] - (BOUNDS.y[0] + BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
+      if (pos[1] > bounds.y[1] - BOUNDARY_MARGIN) {
+        accY -= (pos[1] - (bounds.y[1] - BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
+      } else if (pos[1] < bounds.y[0] + BOUNDARY_MARGIN) {
+        accY -= (pos[1] - (bounds.y[0] + BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
       }
-      if (pos[2] > BOUNDS.z[1] - BOUNDARY_MARGIN) {
-        accZ -= (pos[2] - (BOUNDS.z[1] - BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
-      } else if (pos[2] < BOUNDS.z[0] + BOUNDARY_MARGIN) {
-        accZ -= (pos[2] - (BOUNDS.z[0] + BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
+      if (pos[2] > bounds.z[1] - BOUNDARY_MARGIN) {
+        accZ -= (pos[2] - (bounds.z[1] - BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
+      } else if (pos[2] < bounds.z[0] + BOUNDARY_MARGIN) {
+        accZ -= (pos[2] - (bounds.z[0] + BOUNDARY_MARGIN)) * BOUNDARY_WEIGHT
       }
 
       // 速度更新

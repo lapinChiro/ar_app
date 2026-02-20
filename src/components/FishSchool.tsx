@@ -4,12 +4,13 @@ import { useFishMovement } from '../hooks/useFishMovement'
 
 interface FishSchoolProps {
   count: number
+  worldLocked?: boolean
 }
 
 const FISH_COLORS = ['#4fc3f7', '#81d4fa', '#e91e63', '#ff9800']
 
-export function FishSchool({ count }: FishSchoolProps) {
-  const fishStates = useFishMovement(count)
+export function FishSchool({ count, worldLocked = false }: FishSchoolProps) {
+  const fishStates = useFishMovement(count, worldLocked)
 
   const fishAttributes = useMemo(
     () =>
